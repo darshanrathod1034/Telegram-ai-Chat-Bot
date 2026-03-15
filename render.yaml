@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: ai-telegram-bot
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: TELEGRAM_TOKEN
+        generateValue: false
+      - key: NVIDIA_API_KEY
+        generateValue: false
+      - key: OLLAMA_MODEL
+        value: qwen2.5-coder
+      - key: OLLAMA_BASE_URL
+        value: http://localhost:11434
+      - key: SERVER_URL
+        generateValue: false
+      - key: PORT
+        value: 3000
