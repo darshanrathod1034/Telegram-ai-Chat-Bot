@@ -11,7 +11,8 @@
     "telegram",
     "bot",
     "ai",
-    "gemini",
+    "nvidia",
+    "openai",
     "pdf"
   ],
   "author": "",
@@ -21,6 +22,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "form-data": "^4.0.0",
+    "openai": "^4.28.0",
     "pdfkit": "^0.15.0"
   }
 }

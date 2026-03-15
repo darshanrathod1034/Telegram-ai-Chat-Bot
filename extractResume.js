@@ -1,8 +1,15 @@
 const axios = require('axios');
+const OpenAI = require('openai');
 
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5-coder';
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY;
+
+// Initialize OpenAI with NVIDIA API
+const openai = new OpenAI({
+  apiKey: NVIDIA_API_KEY,
+  baseURL: 'https://integrate.api.nvidia.com/v1',
+});
 
 /**
  * Extracts resume data using Ollama (local LLM)
@@ -70,9 +77,9 @@ Extracted JSON:`;
 }
 
 /**
- * Extracts resume data using Gemini API
+ * Extracts resume data using NVIDIA OpenAI API
  */
-async function extractWithGemini(rawText) {
+async function extractWithNVIDIA(rawText) {
   const prompt = `Please extract the following information from the given resume text and return ONLY valid JSON (no additional text):
 
 {
@@ -117,14 +124,15 @@ ${rawText}
 
 Extracted JSON (just the JSON, no explanation):`;
 
-  const response = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      contents: [{ parts: [{ text: prompt }] }]
-    }
-  );
+  const completion = await openai.chat.completions.create({
+    model: "openai/gpt-oss-20b",
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0.1,
+    max_tokens: 2048,
+    stream: false
+  });
   
-  let jsonString = response.data.candidates[0].content.parts[0].text.trim();
+  let jsonString = completion.choices[0].message.content.trim();
   
   if (jsonString.startsWith("```json")) {
     jsonString = jsonString.replace(/^```json\n/, "").replace(/\n```$/, "");
@@ -137,19 +145,19 @@ Extracted JSON (just the JSON, no explanation):`;
 
 /**
  * Extracts structured resume data from raw text
- * Uses Gemini by default, falls back to Ollama
+ * Uses NVIDIA by default, falls back to Ollama
  * @param {string} rawText - The raw resume text from user input
  * @param {Object} options - Configuration options
- * @param {string} options.provider - 'gemini' or 'ollama' (default: 'gemini')
+ * @param {string} options.provider - 'nvidia' or 'ollama' (default: 'nvidia')
  * @returns {Promise<Object>} - Structured JSON object with extracted resume data
  */
 async function extractResumeData(rawText, options = {}) {
-  const { provider = 'gemini' } = options;
+  const { provider = 'nvidia' } = options;
 
   try {
-    // Try Gemini first (default)
-    if (provider === 'gemini' && GEMINI_API_KEY) {
-      return await extractWithGemini(rawText);
+    // Try NVIDIA first (default)
+    if (provider === 'nvidia' && NVIDIA_API_KEY) {
+      return await extractWithNVIDIA(rawText);
     }
     
     // Fallback to Ollama
@@ -158,12 +166,12 @@ async function extractResumeData(rawText, options = {}) {
     console.error('Extraction error:', error.message);
     
     // If primary fails, try fallback
-    if (provider === 'gemini' && GEMINI_API_KEY) {
+    if (provider === 'nvidia' && NVIDIA_API_KEY) {
       try {
-        console.log('Gemini failed, trying Ollama...');
+        console.log('NVIDIA failed, trying Ollama...');
         return await extractWithOllama(rawText);
       } catch (ollamaError) {
-        throw new Error(`Both Gemini and Ollama failed: ${ollamaError.message}`);
+        throw new Error(`Both NVIDIA and Ollama failed: ${ollamaError.message}`);
       }
     } else {
       throw new Error(`Extraction failed: ${error.message}`);
@@ -206,7 +214,7 @@ Node.js
   `;
 
   try {
-    console.log("Extracting resume data using Gemini (default)...\n");
+    console.log("Extracting resume data using NVIDIA API (default)...\n");
     
     const result = await extractResumeDataAsString(rawResumeText);
     console.log(result);
