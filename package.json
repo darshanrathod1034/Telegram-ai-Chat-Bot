@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "db:migrate": "node -e \"require('./database').runMigrations()\"",
+    "db:cleanup": "node database/cleanup.js",
+    "db:stats": "node -e \"const s = require('./services/analyticsService'); s.getBasicStats().then(console.log)\"",
+    "db:reset": "node -e \"const {query} = require('./database/connection'); query('DROP TABLE IF EXISTS messages, pdf_generations, conversations, users, daily_stats, migrations CASCADE').then(() => { console.log('Tables dropped'); process.exit(0); })\""
   },
   "keywords": [
     "telegram",
@@ -13,7 +17,10 @@
     "ai",
     "nvidia",
     "openai",
-    "pdf"
+    "pdf",
+    "postgresql",
+    "database",
+    "conversation-storage"
   ],
   "author": "",
   "license": "ISC",
@@ -23,6 +30,7 @@
     "express": "^4.18.2",
     "form-data": "^4.0.0",
     "openai": "^4.28.0",
-    "pdfkit": "^0.15.0"
+    "pdfkit": "^0.15.0",
+    "pg": "^8.20.0"
   }
 }
