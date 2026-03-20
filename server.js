@@ -5,30 +5,24 @@ const fs = require('fs');
 const path = require('path');
 const OpenAI = require('openai');
 
-// Import our existing modules
-const { extractResumeData } = require('./extractResume');
-const { generateResumePDFBuffer } = require('./generateResumePDF');
-const { extractBookingData } = require('./extractBooking');
-const { generateBookingPDFBuffer } = require('./generateBookingPDF');
-const { console } = require('inspector');
+const { testConnection, runMigrations } = require('./database');
+const { User, Conversation, Message, PDFGeneration, DailyStats } = require('./models');
+const { ContextService, AnalyticsService } = require('./services');
 
 const app = express();
 app.use(express.json());
 
-// ============ CONFIGURATION ============
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || 'YOUR_TELEGRAM_BOT_TOKEN';
 const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY;
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5-coder';
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const SERVER_URL = process.env.SERVER_URL || 'https://your-domain.com';
 
-// Initialize OpenAI with NVIDIA API
 const openai = new OpenAI({
   apiKey: NVIDIA_API_KEY,
   baseURL: 'https://integrate.api.nvidia.com/v1',
 });
 
-// ============ TELEGRAM API HELPERS ============
 const telegramAPI = (method) => `https://api.telegram.org/bot${TELEGRAM_TOKEN}/${method}`;
 
 async function sendMessage(chatId, text, parseMode = 'Markdown') {
@@ -45,7 +39,8 @@ async function sendMessage(chatId, text, parseMode = 'Markdown') {
 
 async function sendDocument(chatId, buffer, filename = 'document.pdf') {
   try {
-    const formData = new (require('form-data'))();
+    const FormData = require('form-data');
+    const formData = new FormData();
     formData.append('chat_id', chatId);
     formData.append('document', buffer, { filename });
 
@@ -57,24 +52,6 @@ async function sendDocument(chatId, buffer, filename = 'document.pdf') {
   }
 }
 
-async function sendPhoto(chatId, buffer, caption = '') {
-  try {
-    const formData = new (require('form-data'))();
-    formData.append('chat_id', chatId);
-    formData.append('photo', buffer, { filename: 'image.jpg' });
-    if (caption) formData.append('caption', caption);
-
-    await axios.post(telegramAPI('sendPhoto'), formData, {
-      headers: formData.getHeaders()
-    });
-  } catch (error) {
-    console.error('Error sending photo:', error.response?.data || error.message);
-  }
-}
-
-// ============ AI PROVIDERS ============
-
-// Option 1: Use Ollama (local LLM)
 async function askOllama(prompt) {
   try {
     const response = await axios.post(`${OLLAMA_BASE_URL}/api/generate`, {
@@ -89,7 +66,6 @@ async function askOllama(prompt) {
   }
 }
 
-// Option 2: Use NVIDIA OpenAI API
 async function askNVIDIA(prompt) {
   if (!NVIDIA_API_KEY) {
     throw new Error('NVIDIA API key not configured');
@@ -111,9 +87,7 @@ async function askNVIDIA(prompt) {
   }
 }
 
-// Main AI function - tries NVIDIA first, falls back to Ollama
-async function askAI(prompt, preferProvider = 'nvidia') {
-  // Try NVIDIA first (user preference)
+async function askAI(prompt, context = '') {
   if (NVIDIA_API_KEY) {
     try {
       return await askNVIDIA(prompt);
@@ -122,7 +96,6 @@ async function askAI(prompt, preferProvider = 'nvidia') {
     }
   }
 
-  // Fallback to Ollama
   try {
     return await askOllama(prompt);
   } catch (ollamaError) {
@@ -130,47 +103,213 @@ async function askAI(prompt, preferProvider = 'nvidia') {
   }
 }
 
-// ============ PDF GENERATION FUNCTIONS ============
-
-async function generateResumePDF(data) {
-  const buffer = await generateResumePDFBuffer(data);
-  return buffer;
+async function extractAndGenerateResume(userText, conversationId, userId, chatId) {
+  const extractedData = await require('./extractResume')(userText);
+  console.log('✅ Resume data extracted:', JSON.stringify(extractedData, null, 2));
+  
+  await require('./models/Message').create({
+    conversationId,
+    userId,
+    telegramMessageId: null,
+    role: 'assistant',
+    intentDetected: 'resume',
+    content: null,
+    aiResponse: 'Resume data extracted successfully'
+  });
+  
+  await PDFGeneration.createResume({
+    conversationId,
+    userId,
+    extractedData: extractedData.resume
+  });
+  
+  await DailyStats.incrementResumePDF();
+  
+  const pdfBuffer = await require('./generateResumePDF')(extractedData);
+  
+  return pdfBuffer;
 }
 
-async function generateBookingPDF(data) {
-  const buffer = await generateBookingPDFBuffer(data);
-  return buffer;
+async function extractAndGenerateBooking(userText, conversationId, userId, chatId) {
+  const extractedData = await require('./extractBooking')(userText);
+  console.log('✅ Booking data extracted:', JSON.stringify(extractedData, null, 2));
+  
+  await require('./models/Message').create({
+    conversationId,
+    userId,
+    telegramMessageId: null,
+    role: 'assistant',
+    intentDetected: 'booking',
+    content: null,
+    aiResponse: 'Booking data extracted successfully'
+  });
+  
+  await PDFGeneration.createBooking({
+    conversationId,
+    userId,
+    extractedData: extractedData.booking
+  });
+  
+  await DailyStats.incrementBookingPDF();
+  
+  const pdfBuffer = await require('./generateBookingPDF')(extractedData);
+  
+  return pdfBuffer;
 }
-
-// ============ INTENT DETECTION ============
 
 function detectIntent(text) {
   const lowerText = text.toLowerCase();
   
-  // Resume detection keywords
   const resumeKeywords = ['resume', 'cv', 'curriculum', 'bio data', 'make resume', 'create resume', 'generate resume'];
-  
-  // Booking detection keywords  
   const bookingKeywords = ['booking', 'book', 'utara', 'baps', 'hotel', 'room', 'stay', 'guest', 'arrival', 'departure'];
   
-  // Check for resume
   for (const keyword of resumeKeywords) {
-    if (lowerText.includes(keyword)) {
-      return 'resume';
-    }
+    if (lowerText.includes(keyword)) return 'resume';
   }
   
-  // Check for booking
   for (const keyword of bookingKeywords) {
-    if (lowerText.includes(keyword)) {
-      return 'booking';
-    }
+    if (lowerText.includes(keyword)) return 'booking';
   }
   
   return 'general';
 }
 
-// ============ WEBHOOK HANDLER ============
+async function handleUserMessage(message, user, res) {
+  const { id: chatId, type: chatType } = message.chat;
+  const { id: userId, username, first_name, last_name, language_code } = message.from;
+  const userText = message.text;
+  const telegramMessageId = message.message_id;
+
+  console.log(`\n📩 Message from ${first_name} (${chatId}): ${userText}`);
+
+  if (userText === '/start') {
+    await sendMessage(chatId, 
+      `Welcome to AI Bot! 🤖\n\n` +
+      `I can help you with:\n` +
+      `• 💼 Creating professional resumes\n` +
+      `• 🏨 Booking BAPS Utara (Hotel)\n` +
+      `• 💬 General conversations\n\n` +
+      `Just send me your details and I'll help you!`
+    );
+    return res.send('OK');
+  }
+
+  if (userText === '/help') {
+    await sendMessage(chatId,
+      `📖 *Help*\n\n` +
+      `*For Resume:*\n` +
+      `Send your resume details (name, education, experience, skills, etc.)\n\n` +
+      `*For BAPS Utara Booking:*\n` +
+      `Send booking details:\n` +
+      `- Name\n` +
+      `- Places\n` +
+      `- Mobile Number\n` +
+      `- Arrival Date & Time\n` +
+      `- Departure Date & Time\n` +
+      `- Number of Gents/Ladies\n` +
+      `- Room Type\n` +
+      `- Reference\n\n` +
+      `*For Chat:*\n` +
+      `Just ask me anything!`
+    );
+    return res.send('OK');
+  }
+
+  const intent = detectIntent(userText);
+
+  await axios.post(telegramAPI('sendChatAction'), {
+    chat_id: chatId,
+    action: 'typing'
+  });
+
+  let conversationId = null;
+  let conversation = null;
+
+  if (intent !== 'general') {
+    conversation = await Conversation.getOrCreateActive(userId, chatId, intent);
+    conversationId = conversation.id;
+  }
+
+  await Message.createUserMessage({
+    conversationId,
+    userId,
+    telegramMessageId,
+    content: userText,
+    intentDetected: intent
+  });
+
+  await DailyStats.incrementMessage();
+  await DailyStats.incrementGeneralChat();
+
+  if (conversation) {
+    await Conversation.incrementMessageCount(conversationId);
+  }
+
+  if (intent === 'resume') {
+    await sendMessage(chatId, `📄 I understand you want to create a resume. Processing your details...`);
+    
+    try {
+      const pdfBuffer = await extractAndGenerateResume(userText, conversationId, userId, chatId);
+      await sendMessage(chatId, `✅ Resume data extracted! Now generating PDF...`);
+      await sendDocument(chatId, pdfBuffer, 'resume.pdf');
+      await sendMessage(chatId, `✅ Your resume is ready! 📄`);
+    } catch (error) {
+      console.error('Resume error:', error);
+      await sendMessage(chatId, `❌ Sorry, I couldn't process your resume request. Error: ${error.message}`);
+    }
+    
+  } else if (intent === 'booking') {
+    await sendMessage(chatId, `🏨 I understand you want to make a BAPS Utara booking. Processing your details...`);
+    
+    try {
+      const pdfBuffer = await extractAndGenerateBooking(userText, conversationId, userId, chatId);
+      await sendMessage(chatId, `✅ Booking details extracted! Now generating PDF...`);
+      await sendDocument(chatId, pdfBuffer, 'booking-request.pdf');
+      await sendMessage(chatId, `✅ Your booking request is ready! 🏨`);
+    } catch (error) {
+      console.error('Booking error:', error);
+      await sendMessage(chatId, `❌ Sorry, I couldn't process your booking request. Error: ${error.message}`);
+    }
+    
+  } else {
+    const contextString = await ContextService.buildContextString(userId, chatId);
+    
+    let systemPrompt = `You are a helpful AI assistant. Always greet the user with "Jay Swaminarayan 🙏". Respond to the user's message in a friendly and concise manner.`;
+    
+    if (contextString) {
+      systemPrompt += `\n\nPrevious conversation:\n${contextString}`;
+    }
+    
+    const fullPrompt = `${systemPrompt}\n\nUser: ${userText}\n\nAssistant:`;
+    
+    try {
+      const response = await askAI(fullPrompt);
+      
+      await Message.createAssistantMessage({
+        conversationId: conversationId,
+        userId,
+        aiResponse: response
+      });
+      
+      if (conversationId) {
+        await Conversation.addMessageToContext(conversationId, {
+          role: 'assistant',
+          content: response ? response.substring(0, 500) : ''
+        });
+      }
+      
+      await sendMessage(chatId, response);
+    } catch (error) {
+      await sendMessage(chatId, 
+        `Sorry, I couldn't process your request. ` +
+        `Make sure NVIDIA API is configured or Ollama is running.\n\n` +
+        `Error: ${error.message}`
+      );
+    }
+  }
+
+  return res.send('OK');
+}
 
 app.post('/webhook', async (req, res) => {
   try {
@@ -179,121 +318,56 @@ app.post('/webhook', async (req, res) => {
     if (!message || !message.text) {
       return res.send('OK');
     }
-    console.log("log req.body", req.body);
-    const chatId = message.chat.id;
-    const userText = message.text;
-    const userName = message.from.first_name || 'User';
 
-    console.log(`\n📩 Message from ${userName} (${chatId}): ${userText}`);
-
-    // Check for special commands
-    if (userText === '/start') {
-      await sendMessage(chatId, 
-        `Welcome to AI Bot! 🤖\n\n` +
-        `I can help you with:\n` +
-        `• 💼 Creating professional resumes\n` +
-        `• 🏨 Booking BAPS Utara (Hotel)\n` +
-        `• 💬 General conversations\n\n` +
-        `Just send me your details and I'll help you!`
-      );
-      return res.send('OK');
-    }
-
-    if (userText === '/help') {
-      await sendMessage(chatId,
-        `📖 *Help*\n\n` +
-        `*For Resume:*\n` +
-        `Send your resume details (name, education, experience, skills, etc.)\n\n` +
-        `*For BAPS Utara Booking:*\n` +
-        `Send booking details:\n` +
-        `- Name\n` +
-        `- Places\n` +
-        `- Mobile Number\n` +
-        `- Arrival Date & Time\n` +
-        `- Departure Date & Time\n` +
-        `- Number of Gents/Ladies\n` +
-        `- Room Type\n` +
-        `- Reference\n\n` +
-        `*For Chat:*\n` +
-        `Just ask me anything!`
-      );
-      return res.send('OK');
-    }
-
-    // Detect what user wants
-    const intent = detectIntent(userText);
+    const { id: userId, username, first_name, last_name, language_code } = message.from;
     
-    // Show typing indicator
-    await axios.post(telegramAPI('sendChatAction'), {
-      chat_id: chatId,
-      action: 'typing'
-    });
+    try {
+      const { user } = await User.findOrCreate({
+        id: userId,
+        username,
+        first_name,
+        last_name,
+        language_code
+      });
 
-    if (intent === 'resume') {
-      // Handle resume request
-      await sendMessage(chatId, `📄 I understand you want to create a resume. Processing your details...`);
+      await DailyStats.incrementNewUser();
       
-      try {
-        const extractedData = await extractResumeData(userText);
-        console.log('✅ Resume data extracted:', JSON.stringify(extractedData, null, 2));
-        
-        await sendMessage(chatId, `✅ Resume data extracted! Now generating PDF...`);
-        
-        const pdfBuffer = await generateResumePDF(extractedData);
-        
-        await sendDocument(chatId, pdfBuffer, 'resume.pdf');
-        await sendMessage(chatId, `✅ Your resume is ready! 📄`);
-        
-      } catch (error) {
-        console.error('Resume error:', error);
-        await sendMessage(chatId, `❌ Sorry, I couldn't process your resume request. Error: ${error.message}`);
-      }
-      
-    } else if (intent === 'booking') {
-      // Handle booking request
-      await sendMessage(chatId, `🏨 I understand you want to make a BAPS Utara booking. Processing your details...`);
-      
-      try {
-        const extractedData = await extractBookingData(userText);
-        console.log('✅ Booking data extracted:', JSON.stringify(extractedData, null, 2));
-        
-        await sendMessage(chatId, `✅ Booking details extracted! Now generating PDF...`);
-        
-        const pdfBuffer = await generateBookingPDF(extractedData);
-        
-        await sendDocument(chatId, pdfBuffer, 'booking-request.pdf');
-        await sendMessage(chatId, `✅ Your booking request is ready! 🏨`);
-        
-      } catch (error) {
-        console.error('Booking error:', error);
-        await sendMessage(chatId, `❌ Sorry, I couldn't process your booking request. Error: ${error.message}`);
-      }
-      
-    } else {
-      // General chat - use AI
-      const systemPrompt = `You are a helpful AI assistant. Respond to the user's message in a friendly and concise manner. and always greet the user with "Jay Swaminarayan 🙏"`;
-      const fullPrompt = `${systemPrompt}\n\nUser: ${userText}\n\nAssistant:`;
-      
-      try {
-        const response = await askAI(fullPrompt);
-        await sendMessage(chatId, response);
-      } catch (error) {
-        await sendMessage(chatId, 
-          `Sorry, I couldn't process your request. ` +
-          `Make sure NVIDIA API is configured or Ollama is running.\n\n` +
-          `Error: ${error.message}`
-        );
-      }
+      await handleUserMessage(message, user, res);
+    } catch (dbError) {
+      console.log('Database not available, proceeding without storage:', dbError.message);
+      await handleUserMessage(message, null, res);
     }
-
-    res.send('OK');
   } catch (error) {
     console.error('Webhook error:', error);
-    res.send('OK'); // Always respond OK to Telegram
+    res.send('OK');
   }
 });
 
-// ============ SETUP WEBHOOK ============
+app.post('/callback-query', async (req, res) => {
+  try {
+    const callbackQuery = req.body.callback_query;
+    
+    if (!callbackQuery) {
+      return res.send('OK');
+    }
+
+    const { id: queryId, data, from, message } = callbackQuery;
+    const chatId = message.chat.id;
+    const userId = from.id;
+
+    console.log(`Callback query from ${from.first_name}: ${data}`);
+
+    await axios.post(telegramAPI('answerCallbackQuery'), {
+      callback_query_id: queryId,
+      text: 'Processing...'
+    });
+
+    res.send('OK');
+  } catch (error) {
+    console.error('Callback query error:', error);
+    res.send('OK');
+  }
+});
 
 app.get('/setup-webhook', async (req, res) => {
   try {
@@ -333,12 +407,50 @@ app.get('/remove-webhook', async (req, res) => {
   }
 });
 
-// ============ HEALTH CHECK ============
+app.get('/stats', async (req, res) => {
+  try {
+    const stats = await AnalyticsService.getBasicStats();
+    res.json({ success: true, stats });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
 
-app.get('/', (req, res) => {
-  res.json({
-    status: 'running',
+app.get('/admin/stats', async (req, res) => {
+  try {
+    const dashboardData = await AnalyticsService.getDashboardData();
+    res.json({ success: true, data: dashboardData });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
+app.post('/admin/cleanup', async (req, res) => {
+  try {
+    const { cleanupOldData } = require('./database/cleanup');
+    const result = await cleanupOldData();
+    res.json({ success: true, result });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
+app.get('/health', async (req, res) => {
+  let dbStatus = 'not configured';
+  
+  try {
+    if (process.env.DATABASE_URL) {
+      const connected = await testConnection();
+      dbStatus = connected ? 'connected' : 'disconnected';
+    }
+  } catch (error) {
+    dbStatus = 'error';
+  }
+
+  res.json({ 
+    status: 'healthy',
     bot: 'AI Telegram Bot',
+    database: dbStatus,
     features: ['Resume PDF Generation', 'BAPS Utara Booking PDF', 'AI Chat'],
     providers: {
       nvidia: NVIDIA_API_KEY ? 'configured' : 'not configured',
@@ -347,31 +459,64 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
+app.get('/', (req, res) => {
+  res.json({
+    status: 'running',
+    bot: 'AI Telegram Bot',
+    features: ['Resume PDF Generation', 'BAPS Utara Booking PDF', 'AI Chat', 'Conversation Storage'],
+    providers: {
+      nvidia: NVIDIA_API_KEY ? 'configured' : 'not configured',
+      ollama: OLLAMA_MODEL
+    },
+    database: process.env.DATABASE_URL ? 'configured' : 'not configured'
+  });
 });
-
-// ============ START SERVER ============
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`
-╔═══════════════════════════════════════════╗
-║     🤖 AI Telegram Bot Server Running     ║
-╠═══════════════════════════════════════════╣
+const startServer = async () => {
+  if (process.env.DATABASE_URL) {
+    try {
+      console.log('🔌 Testing database connection...');
+      const connected = await testConnection();
+      
+      if (connected) {
+        console.log('✅ Database connected successfully');
+        console.log('🚀 Running migrations...');
+        await runMigrations();
+        console.log('✅ Migrations completed');
+      }
+    } catch (error) {
+      console.log('⚠️  Database connection failed:', error.message);
+      console.log('📝 Bot will run without database storage');
+    }
+  } else {
+    console.log('⚠️  DATABASE_URL not configured');
+    console.log('📝 Bot will run without database storage');
+  }
+
+  app.listen(PORT, () => {
+    console.log(`
+╔═══════════════════════════════════════════════════════╗
+║     🤖 AI Telegram Bot Server Running                ║
+╠═══════════════════════════════════════════════════════╣
 ║  Port: ${PORT}
 ║  Telegram: /webhook endpoint ready
 ║  NVIDIA API: ${NVIDIA_API_KEY ? '✅ Configured' : '❌ Not configured'}
 ║  Ollama: ${OLLAMA_MODEL} (fallback)
-╚═══════════════════════════════════════════╝
+║  Database: ${process.env.DATABASE_URL ? '✅ Connected' : '❌ Not configured'}
+╚═══════════════════════════════════════════════════════╝
 
 📋 To set webhook, visit:
    ${SERVER_URL}/setup-webhook
 
+📊 Stats endpoint: ${SERVER_URL}/stats
+
 💬 To chat, send a message to your Telegram bot!
-  `);
-});
+    `);
+  });
+};
+
+startServer();
 
 module.exports = app;
-

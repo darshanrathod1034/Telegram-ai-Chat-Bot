@@ -5,15 +5,30 @@ services:
     buildCommand: npm install
     startCommand: npm start
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: TELEGRAM_TOKEN
-        generateValue: false
+        sync: false
       - key: NVIDIA_API_KEY
-        generateValue: false
+        sync: false
       - key: OLLAMA_MODEL
         value: qwen2.5-coder
       - key: OLLAMA_BASE_URL
         value: http://localhost:11434
       - key: SERVER_URL
-        generateValue: false
+        fromService:
+          type: web
+          name: ai-telegram-bot
+          envVarKey: RENDER_EXTERNAL_URL
       - key: PORT
-        value: 3000
+        value: "3000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-telegram-postgres
+          property: connectionString
+
+databases:
+  - name: ai-telegram-postgres
+    plan: free
+    databaseName: telegram_bot
+    ipAllowList: []
