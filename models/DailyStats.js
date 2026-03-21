@@ -29,13 +29,18 @@ const DailyStats = {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    const data = {};
-    data[field] = { increment: value };
+    // For update: use increment
+    const updateData = {};
+    updateData[field] = { increment: value };
+    
+    // For create: use plain value
+    const createData = {};
+    createData[field] = value;
     
     return await prisma.dailyStats.upsert({
       where: { date: today },
-      update: data,
-      create: { date: today, ...data }
+      update: updateData,
+      create: { date: today, ...createData }
     });
   },
 

@@ -111,55 +111,79 @@ async function askAI(prompt, context = '') {
 }
 
 async function extractAndGenerateResume(userText, conversationId, userId, chatId) {
-  const extractedData = await require('./extractResume')(userText);
+  const extractedData = await require('./extractResume').extractResumeData(userText);
   console.log('✅ Resume data extracted:', JSON.stringify(extractedData, null, 2));
   
-  await require('./models/Message').create({
-    conversationId,
-    userId,
-    telegramMessageId: null,
-    role: 'assistant',
-    intentDetected: 'resume',
-    content: null,
-    aiResponse: 'Resume data extracted successfully'
-  });
+  try {
+    await Message.create({
+      conversationId,
+      userId,
+      telegramMessageId: null,
+      role: 'assistant',
+      intentDetected: 'resume',
+      content: null,
+      aiResponse: 'Resume data extracted successfully'
+    });
+  } catch (e) {
+    console.log('Could not save message:', e.message);
+  }
   
-  await PDFGeneration.createResume({
-    conversationId,
-    userId,
-    extractedData: extractedData.resume
-  });
+  try {
+    await PDFGeneration.createResume({
+      conversationId,
+      userId,
+      extractedData: extractedData.resume
+    });
+  } catch (e) {
+    console.log('Could not save PDF generation:', e.message);
+  }
   
-  await DailyStats.incrementResumePDF();
+  try {
+    await DailyStats.incrementResumePDF();
+  } catch (e) {
+    console.log('Could not increment resume PDF count:', e.message);
+  }
   
-  const pdfBuffer = await require('./generateResumePDF')(extractedData);
+  const pdfBuffer = await require('./generateResumePDF').generateResumePDFBuffer(extractedData);
   
   return pdfBuffer;
 }
 
 async function extractAndGenerateBooking(userText, conversationId, userId, chatId) {
-  const extractedData = await require('./extractBooking')(userText);
+  const extractedData = await require('./extractBooking').extractBookingData(userText);
   console.log('✅ Booking data extracted:', JSON.stringify(extractedData, null, 2));
   
-  await require('./models/Message').create({
-    conversationId,
-    userId,
-    telegramMessageId: null,
-    role: 'assistant',
-    intentDetected: 'booking',
-    content: null,
-    aiResponse: 'Booking data extracted successfully'
-  });
+  try {
+    await Message.create({
+      conversationId,
+      userId,
+      telegramMessageId: null,
+      role: 'assistant',
+      intentDetected: 'booking',
+      content: null,
+      aiResponse: 'Booking data extracted successfully'
+    });
+  } catch (e) {
+    console.log('Could not save message:', e.message);
+  }
   
-  await PDFGeneration.createBooking({
-    conversationId,
-    userId,
-    extractedData: extractedData.booking
-  });
+  try {
+    await PDFGeneration.createBooking({
+      conversationId,
+      userId,
+      extractedData: extractedData.booking
+    });
+  } catch (e) {
+    console.log('Could not save PDF generation:', e.message);
+  }
   
-  await DailyStats.incrementBookingPDF();
+  try {
+    await DailyStats.incrementBookingPDF();
+  } catch (e) {
+    console.log('Could not increment booking PDF count:', e.message);
+  }
   
-  const pdfBuffer = await require('./generateBookingPDF')(extractedData);
+  const pdfBuffer = await require('./generateBookingPDF').generateBookingPDFBuffer(extractedData);
   
   return pdfBuffer;
 }
@@ -189,9 +213,12 @@ async function handleUserMessage(message, user, res) {
 
   console.log(`\n📩 Message from ${first_name} (${chatId}): ${userText}`);
 
+  // Get user's display name
+  const displayName = first_name || username || 'Friend';
+  
   if (userText === '/start') {
     await sendMessage(chatId, 
-      `Welcome to AI Bot! 🤖\n\n` +
+      `Welcome ${displayName}! 🙏🤖\n\n` +
       `I can help you with:\n` +
       `• 💼 Creating professional resumes\n` +
       `• 🏨 Booking BAPS Utara (Hotel)\n` +
@@ -203,7 +230,7 @@ async function handleUserMessage(message, user, res) {
 
   if (userText === '/help') {
     await sendMessage(chatId,
-      `📖 *Help*\n\n` +
+      `📖 *Help* ${displayName}\n\n` +
       `*For Resume:*\n` +
       `Send your resume details (name, education, experience, skills, etc.)\n\n` +
       `*For BAPS Utara Booking:*\n` +
@@ -272,29 +299,29 @@ async function handleUserMessage(message, user, res) {
   }
 
   if (intent === 'resume') {
-    await sendMessage(chatId, `📄 I understand you want to create a resume. Processing your details...`);
+    await sendMessage(chatId, `📄 ${displayName}, I understand you want to create a resume. Processing your details...`);
     
     try {
       const pdfBuffer = await extractAndGenerateResume(userText, conversationId, userId, chatId);
       await sendMessage(chatId, `✅ Resume data extracted! Now generating PDF...`);
       await sendDocument(chatId, pdfBuffer, 'resume.pdf');
-      await sendMessage(chatId, `✅ Your resume is ready! 📄`);
+      await sendMessage(chatId, `✅ ${displayName}, your resume is ready! 📄`);
     } catch (error) {
       console.error('Resume error:', error);
-      await sendMessage(chatId, `❌ Sorry, I couldn't process your resume request. Error: ${error.message}`);
+      await sendMessage(chatId, `❌ ${displayName}, sorry I couldn't process your resume request. Error: ${error.message}`);
     }
     
   } else if (intent === 'booking') {
-    await sendMessage(chatId, `🏨 I understand you want to make a BAPS Utara booking. Processing your details...`);
+    await sendMessage(chatId, `🏨 ${displayName}, I understand you want to make a BAPS Utara booking. Processing your details...`);
     
     try {
       const pdfBuffer = await extractAndGenerateBooking(userText, conversationId, userId, chatId);
       await sendMessage(chatId, `✅ Booking details extracted! Now generating PDF...`);
       await sendDocument(chatId, pdfBuffer, 'booking-request.pdf');
-      await sendMessage(chatId, `✅ Your booking request is ready! 🏨`);
+      await sendMessage(chatId, `✅ ${displayName}, your booking request is ready! 🏨`);
     } catch (error) {
       console.error('Booking error:', error);
-      await sendMessage(chatId, `❌ Sorry, I couldn't process your booking request. Error: ${error.message}`);
+      await sendMessage(chatId, `❌ ${displayName}, sorry I couldn't process your booking request. Error: ${error.message}`);
     }
     
   } else if (intent === 'general') {
@@ -311,7 +338,7 @@ async function handleUserMessage(message, user, res) {
       console.log('Could not build context string:', e.message);
     }
     
-    let systemPrompt = `You are a helpful AI assistant. Always greet the user with "Jay Swaminarayan 🙏". Respond to the user's message in a friendly and concise manner.`;
+    let systemPrompt = `You are a helpful AI assistant. Always greet the user by name with "Jay Swaminarayan 🙏 ${displayName}". Respond to the user's message in a friendly and concise manner.`;
     
     if (contextString) {
       systemPrompt += `\n\nPrevious conversation:\n${contextString}`;
@@ -329,7 +356,7 @@ async function handleUserMessage(message, user, res) {
     } catch (error) {
       console.error('AI Error:', error.message);
       await sendMessage(chatId, 
-        `Sorry, I couldn't process your request. ` +
+        `${displayName}, sorry I couldn't process your request. ` +
         `Make sure NVIDIA API is configured or Ollama is running locally.\n\n` +
         `Error: ${error.message}`
       );
