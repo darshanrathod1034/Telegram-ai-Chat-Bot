@@ -1,188 +1,176 @@
-const { query } = require('../database/connection');
+const { prisma } = require('../database/prisma');
 
 const DailyStats = {
   async get(date) {
-    const result = await query(
-      'SELECT * FROM daily_stats WHERE date = $1',
-      [date]
-    );
-    return result.rows[0] || null;
+    return await prisma.dailyStats.findUnique({
+      where: { date: new Date(date) }
+    });
   },
 
   async getOrCreate(date) {
     let stats = await this.get(date);
     
     if (!stats) {
-      const result = await query(`
-        INSERT INTO daily_stats (date)
-        VALUES ($1)
-        ON CONFLICT (date) DO NOTHING
-        RETURNING *
-      `, [date]);
-      stats = result.rows[0];
+      stats = await prisma.dailyStats.create({
+        data: { date: new Date(date) }
+      });
     }
     
     return stats;
   },
 
   async increment(field, value = 1) {
-    const allowedFields = ['new_users', 'active_users', 'total_messages', 'resume_pdfs', 'booking_pdfs', 'general_chats'];
+    const allowedFields = ['newUsers', 'activeUsers', 'totalMessages', 'resumePdfs', 'bookingPdfs', 'generalChats'];
     
     if (!allowedFields.includes(field)) {
       throw new Error(`Invalid field: ${field}`);
     }
     
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     
-    const result = await query(`
-      INSERT INTO daily_stats (date, ${field})
-      VALUES ($1, $2)
-      ON CONFLICT (date) DO UPDATE SET
-        ${field} = daily_stats.${field} + $2,
-        updated_at = NOW()
-      RETURNING *
-    `, [today, value]);
+    const data = {};
+    data[field] = { increment: value };
     
-    return result.rows[0];
+    return await prisma.dailyStats.upsert({
+      where: { date: today },
+      update: data,
+      create: { date: today, ...data }
+    });
   },
 
   async incrementNewUser() {
-    return await this.increment('new_users', 1);
+    return await this.increment('newUsers', 1);
   },
 
   async incrementMessage() {
-    return await this.increment('total_messages', 1);
+    return await this.increment('totalMessages', 1);
   },
 
   async incrementResumePDF() {
-    return await this.increment('resume_pdfs', 1);
+    return await this.increment('resumePdfs', 1);
   },
 
   async incrementBookingPDF() {
-    return await this.increment('booking_pdfs', 1);
+    return await this.increment('bookingPdfs', 1);
   },
 
   async incrementGeneralChat() {
-    return await this.increment('general_chats', 1);
+    return await this.increment('generalChats', 1);
   },
 
   async setActiveUsers(count) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     
-    const result = await query(`
-      INSERT INTO daily_stats (date, active_users)
-      VALUES ($1, $2)
-      ON CONFLICT (date) DO UPDATE SET
-        active_users = $2,
-        updated_at = NOW()
-      RETURNING *
-    `, [today, count]);
-    
-    return result.rows[0];
+    return await prisma.dailyStats.upsert({
+      where: { date: today },
+      update: { activeUsers: count },
+      create: { date: today, activeUsers: count }
+    });
   },
 
   async getRange(startDate, endDate) {
-    const result = await query(`
-      SELECT * FROM daily_stats 
-      WHERE date >= $1 AND date <= $2
-      ORDER BY date DESC
-    `, [startDate, endDate]);
-    return result.rows;
+    return await prisma.dailyStats.findMany({
+      where: {
+        date: {
+          gte: new Date(startDate),
+          lte: new Date(endDate)
+        }
+      },
+      orderBy: { date: 'desc' }
+    });
   },
 
   async getLastDays(days = 7) {
-    const result = await query(`
-      SELECT * FROM daily_stats 
-      WHERE date >= CURRENT_DATE - $1
-      ORDER BY date DESC
-    `, [days]);
-    return result.rows;
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    startDate.setHours(0, 0, 0, 0);
+    
+    return await prisma.dailyStats.findMany({
+      where: { date: { gte: startDate } },
+      orderBy: { date: 'desc' }
+    });
   },
 
   async getTotals(sinceDate = null) {
-    let sql = `
-      SELECT 
-        SUM(new_users) as total_new_users,
-        SUM(active_users) as total_active_users,
-        SUM(total_messages) as total_messages,
-        SUM(resume_pdfs) as total_resume_pdfs,
-        SUM(booking_pdfs) as total_booking_pdfs,
-        SUM(general_chats) as total_general_chats
-      FROM daily_stats
-    `;
+    const where = sinceDate ? { date: { gte: new Date(sinceDate) } } : {};
     
-    const params = [];
-    if (sinceDate) {
-      sql += ' WHERE date >= $1';
-      params.push(sinceDate);
-    }
+    const result = await prisma.dailyStats.aggregate({
+      where,
+      _sum: {
+        newUsers: true,
+        activeUsers: true,
+        totalMessages: true,
+        resumePdfs: true,
+        bookingPdfs: true,
+        generalChats: true
+      }
+    });
     
-    const result = await query(sql, params);
-    return result.rows[0];
-  },
-
-  async aggregateFromMessages() {
-    const today = new Date().toISOString().split('T')[0];
-    
-    await query(`
-      INSERT INTO daily_stats (date, total_messages)
-      SELECT $1, COUNT(*)
-      FROM messages
-      WHERE DATE(created_at) = $1
-      ON CONFLICT (date) DO UPDATE SET
-        total_messages = (
-          SELECT COUNT(*) FROM messages WHERE DATE(created_at) = $1
-        ),
-        updated_at = NOW()
-    `, [today]);
-    
-    await query(`
-      INSERT INTO daily_stats (date, resume_pdfs, booking_pdfs)
-      SELECT $1,
-        COUNT(*) FILTER (WHERE pdf_type = 'resume'),
-        COUNT(*) FILTER (WHERE pdf_type = 'booking')
-      FROM pdf_generations
-      WHERE DATE(created_at) = $1
-      ON CONFLICT (date) DO UPDATE SET
-        resume_pdfs = (
-          SELECT COUNT(*) FROM pdf_generations 
-          WHERE DATE(created_at) = $1 AND pdf_type = 'resume'
-        ),
-        booking_pdfs = (
-          SELECT COUNT(*) FROM pdf_generations 
-          WHERE DATE(created_at) = $1 AND pdf_type = 'booking'
-        ),
-        updated_at = NOW()
-    `, [today]);
-    
-    return await this.get(today);
+    return {
+      totalNewUsers: result._sum.newUsers || 0,
+      totalActiveUsers: result._sum.activeUsers || 0,
+      totalMessages: result._sum.totalMessages || 0,
+      totalResumePdfs: result._sum.resumePdfs || 0,
+      totalBookingPdfs: result._sum.bookingPdfs || 0,
+      totalGeneralChats: result._sum.generalChats || 0
+    };
   },
 
   async refreshTodayStats() {
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     
-    await this.aggregateFromMessages();
+    // Get message count
+    const messageCount = await prisma.message.count({
+      where: {
+        createdAt: { gte: today }
+      }
+    });
     
-    const activeUsers = await query(`
-      SELECT COUNT(DISTINCT user_id) as count
-      FROM conversations
-      WHERE DATE(last_message_at) = $1
-    `, [today]);
+    // Get PDF counts
+    const [resumePdfs, bookingPdfs] = await Promise.all([
+      prisma.pDFGeneration.count({
+        where: { 
+          createdAt: { gte: today },
+          pdfType: 'resume'
+        }
+      }),
+      prisma.pDFGeneration.count({
+        where: { 
+          createdAt: { gte: today },
+          pdfType: 'booking'
+        }
+      })
+    ]);
     
-    await this.setActiveUsers(parseInt(activeUsers.rows[0].count));
+    // Get active users
+    const activeUsersResult = await prisma.conversation.groupBy({
+      by: ['userId'],
+      where: {
+        lastMessageAt: { gte: today }
+      }
+    });
     
-    return await this.get(today);
+    return await prisma.dailyStats.upsert({
+      where: { date: today },
+      update: {
+        totalMessages: messageCount,
+        resumePdfs,
+        bookingPdfs,
+        activeUsers: activeUsersResult.length,
+        updatedAt: new Date()
+      },
+      create: {
+        date: today,
+        totalMessages: messageCount,
+        resumePdfs,
+        bookingPdfs,
+        activeUsers: activeUsersResult.length
+      }
+    });
   }
 };
-
-if (require.main === module) {
-  (async () => {
-    try {
-      console.log('DailyStats model test skipped (database not configured)');
-    } catch (error) {
-      console.log('DailyStats model test failed:', error.message);
-    }
-  })();
-}
 
 module.exports = DailyStats;

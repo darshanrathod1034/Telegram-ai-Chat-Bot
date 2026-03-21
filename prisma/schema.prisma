@@ -1,0 +1,109 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Model
+model User {
+  id            BigInt   @id
+  username      String?
+  firstName     String   @map("first_name")
+  lastName      String?  @map("last_name")
+  languageCode  String?  @map("language_code")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  lastSeenAt    DateTime @default(now()) @map("last_seen_at")
+
+  conversations Conversation[]
+  messages      Message[]
+  pdfGenerations PDFGeneration[]
+
+  @@map("users")
+}
+
+// Conversation Model
+model Conversation {
+  id            String   @id @default(uuid())
+  userId        BigInt  @map("user_id")
+  chatId        BigInt  @map("chat_id")
+  intentType    String  @map("intent_type")
+  status        String   @default("active")
+  messageCount  Int      @default(0) @map("message_count")
+  summary       String?
+  contextWindow Json?    @map("context_window")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  lastMessageAt DateTime @default(now()) @map("last_message_at")
+
+  user          User     @relation(fields: [userId], references: [id])
+  messages      Message[]
+  pdfGenerations PDFGeneration[]
+
+  @@index([userId, lastMessageAt])
+  @@index([updatedAt])
+  @@index([status])
+  @@map("conversations")
+}
+
+// Message Model
+model Message {
+  id                  String   @id @default(uuid())
+  conversationId     String?  @map("conversation_id")
+  userId             BigInt   @map("user_id")
+  telegramMessageId   BigInt?  @map("telegram_message_id")
+  role               String
+  intentDetected     String?  @map("intent_detected")
+  contentPreview     String?  @map("content_preview") @db.VarChar(500)
+  aiResponsePreview  String?  @map("ai_response_preview") @db.VarChar(500)
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  conversation       Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user               User         @relation(fields: [userId], references: [id])
+
+  @@index([conversationId, createdAt])
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@map("messages")
+}
+
+// PDFGeneration Model
+model PDFGeneration {
+  id             String   @id @default(uuid())
+  conversationId String?  @map("conversation_id")
+  userId         BigInt   @map("user_id")
+  pdfType        String   @map("pdf_type")
+  extractedData  Json     @map("extracted_data")
+  filename       String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  user           User         @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@index([pdfType])
+  @@map("pdf_generations")
+}
+
+// DailyStats Model
+model DailyStats {
+  date           DateTime @id @map("date") @db.Date
+  newUsers      Int      @default(0) @map("new_users")
+  activeUsers   Int      @default(0) @map("active_users")
+  totalMessages Int      @default(0) @map("total_messages")
+  resumePdfs    Int      @default(0) @map("resume_pdfs")
+  bookingPdfs   Int      @default(0) @map("booking_pdfs")
+  generalChats  Int      @default(0) @map("general_chats")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([date])
+  @@map("daily_stats")
+}

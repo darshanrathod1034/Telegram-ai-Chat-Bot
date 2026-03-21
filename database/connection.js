@@ -1,4 +1,3 @@
-require('dotenv').config();
 const { Pool } = require('pg');
 
 const isNeonDB = process.env.DATABASE_URL && process.env.DATABASE_URL.includes('neon.tech');

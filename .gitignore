@@ -1,7 +1,6 @@
 # Dependencies
 node_modules/
-# Keep package-lock.json - important for production deployments
-# package-lock.json
+package-lock.json
 
 # Environment variables
 .env
@@ -31,3 +30,9 @@ yarn-error.log*
 # Temporary files
 tmp/
 temp/
+
+# Build output
+dist/
+build/
+
+/generated/prisma

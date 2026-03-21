@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const OpenAI = require('openai');
 
-const { testConnection, runMigrations } = require('./database');
+const { testConnection } = require('./database/prisma');
 const { User, Conversation, Message, PDFGeneration, DailyStats } = require('./models');
 const { ContextService, AnalyticsService } = require('./services');
 
@@ -322,7 +322,7 @@ app.post('/webhook', async (req, res) => {
     const { id: userId, username, first_name, last_name, language_code } = message.from;
     
     try {
-      const { user } = await User.findOrCreate({
+      const { user, created } = await User.findOrCreate({
         id: userId,
         username,
         first_name,
@@ -330,7 +330,10 @@ app.post('/webhook', async (req, res) => {
         language_code
       });
 
-      await DailyStats.incrementNewUser();
+      // Only increment new user count if user was just created
+      if (created) {
+        await DailyStats.incrementNewUser();
+      }
       
       await handleUserMessage(message, user, res);
     } catch (dbError) {
@@ -481,10 +484,8 @@ const startServer = async () => {
       const connected = await testConnection();
       
       if (connected) {
-        console.log('✅ Database connected successfully');
-        console.log('🚀 Running migrations...');
-        await runMigrations();
-        console.log('✅ Migrations completed');
+        console.log('✅ Database connected successfully with Prisma');
+        console.log('📝 Run "npx prisma db push" to sync schema');
       }
     } catch (error) {
       console.log('⚠️  Database connection failed:', error.message);
