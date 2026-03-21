@@ -66,10 +66,11 @@ async function generateBookingPDF(bookingData, outputPath = 'booking-request.pdf
       doc.moveDown(0.3);
       
       // Divider
+      const dividerY = doc.y;
       doc.strokeColor(primaryColor)
         .lineWidth(1)
-        .moveTo(50, doc.y)
-        .lineTo(545, doc.y)
+        .moveTo(50, dividerY)
+        .lineTo(545, dividerY)
         .stroke();
 
       doc.moveDown(0.8);

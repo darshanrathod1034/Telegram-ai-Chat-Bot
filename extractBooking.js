@@ -52,7 +52,13 @@ Extracted JSON:`;
     jsonString = jsonString.replace(/^```\n/, "").replace(/\n```$/, "");
   }
   
-  return JSON.parse(jsonString);
+  try {
+    return JSON.parse(jsonString);
+  } catch (parseError) {
+    console.error('JSON Parse Error (Ollama):', parseError.message);
+    console.error('Raw response:', jsonString.substring(0, 500));
+    throw new Error(`Failed to parse LLM response as JSON: ${parseError.message}`);
+  }
 }
 
 /**
@@ -98,7 +104,13 @@ Extracted JSON (just the JSON, no explanation):`;
     jsonString = jsonString.replace(/^```\n/, "").replace(/\n```$/, "");
   }
   
-  return JSON.parse(jsonString);
+  try {
+    return JSON.parse(jsonString);
+  } catch (parseError) {
+    console.error('JSON Parse Error (NVIDIA):', parseError.message);
+    console.error('Raw response:', jsonString.substring(0, 500));
+    throw new Error(`Failed to parse LLM response as JSON: ${parseError.message}`);
+  }
 }
 
 /**
@@ -115,25 +127,19 @@ async function extractBookingData(rawText, options = {}) {
   try {
     // Try NVIDIA first (default)
     if (provider === 'nvidia' && NVIDIA_API_KEY) {
-      return await extractWithNVIDIA(rawText);
+      try {
+        return await extractWithNVIDIA(rawText);
+      } catch (nvidiaError) {
+        console.log('NVIDIA extraction failed, trying Ollama...');
+      }
     }
     
     // Fallback to Ollama
+    console.log('Using Ollama for extraction...');
     return await extractWithOllama(rawText);
   } catch (error) {
     console.error('Extraction error:', error.message);
-    
-    // If primary fails, try fallback
-    if (provider === 'nvidia' && NVIDIA_API_KEY) {
-      try {
-        console.log('NVIDIA failed, trying Ollama...');
-        return await extractWithOllama(rawText);
-      } catch (ollamaError) {
-        throw new Error(`Both NVIDIA and Ollama failed: ${ollamaError.message}`);
-      }
-    } else {
-      throw new Error(`Extraction failed: ${error.message}`);
-    }
+    throw new Error(`Extraction failed: ${error.message}`);
   }
 }
 

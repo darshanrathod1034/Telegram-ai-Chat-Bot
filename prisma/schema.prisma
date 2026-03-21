@@ -73,6 +73,8 @@ model Message {
   @@map("messages")
 }
 
+// Note: conversation_id is nullable to support general chat messages without a conversation
+
 // PDFGeneration Model
 model PDFGeneration {
   id             String   @id @default(uuid())
@@ -94,7 +96,7 @@ model PDFGeneration {
 
 // DailyStats Model
 model DailyStats {
-  date           DateTime @id @map("date") @db.Date
+  date           DateTime @id @map("date")
   newUsers      Int      @default(0) @map("new_users")
   activeUsers   Int      @default(0) @map("active_users")
   totalMessages Int      @default(0) @map("total_messages")

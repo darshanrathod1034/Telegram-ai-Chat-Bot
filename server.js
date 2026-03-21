@@ -18,10 +18,17 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5-coder';
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const SERVER_URL = process.env.SERVER_URL || 'https://your-domain.com';
 
-const openai = new OpenAI({
-  apiKey: NVIDIA_API_KEY,
-  baseURL: 'https://integrate.api.nvidia.com/v1',
-});
+// Initialize OpenAI client only if NVIDIA API key is available
+let openai = null;
+if (NVIDIA_API_KEY) {
+  openai = new OpenAI({
+    apiKey: NVIDIA_API_KEY,
+    baseURL: 'https://integrate.api.nvidia.com/v1',
+  });
+  console.log('✅ NVIDIA API configured');
+} else {
+  console.log('⚠️  NVIDIA_API_KEY not set - will use Ollama only');
+}
 
 const telegramAPI = (method) => `https://api.telegram.org/bot${TELEGRAM_TOKEN}/${method}`;
 
@@ -67,7 +74,7 @@ async function askOllama(prompt) {
 }
 
 async function askNVIDIA(prompt) {
-  if (!NVIDIA_API_KEY) {
+  if (!NVIDIA_API_KEY || !openai) {
     throw new Error('NVIDIA API key not configured');
   }
 
@@ -226,23 +233,42 @@ async function handleUserMessage(message, user, res) {
   let conversation = null;
 
   if (intent !== 'general') {
-    conversation = await Conversation.getOrCreateActive(userId, chatId, intent);
-    conversationId = conversation.id;
+    try {
+      conversation = await Conversation.getOrCreateActive(userId, chatId, intent);
+      conversationId = conversation.id;
+    } catch (e) {
+      console.log('Could not get/create conversation:', e.message);
+    }
   }
 
-  await Message.createUserMessage({
-    conversationId,
-    userId,
-    telegramMessageId,
-    content: userText,
-    intentDetected: intent
-  });
+  // Only save user message if there's a conversation (resume/booking intents)
+  // For general chat, conversationId is null - skip saving
+  if (conversationId) {
+    try {
+      await Message.createUserMessage({
+        conversationId,
+        userId,
+        telegramMessageId,
+        content: userText,
+        intentDetected: intent
+      });
+    } catch (e) {
+      console.log('Could not save user message:', e.message);
+    }
+  }
 
-  await DailyStats.incrementMessage();
-  await DailyStats.incrementGeneralChat();
+  try {
+    await DailyStats.incrementMessage();
+  } catch (e) {
+    console.log('Could not increment message count:', e.message);
+  }
 
   if (conversation) {
-    await Conversation.incrementMessageCount(conversationId);
+    try {
+      await Conversation.incrementMessageCount(conversationId);
+    } catch (e) {
+      console.log('Could not increment conversation count:', e.message);
+    }
   }
 
   if (intent === 'resume') {
@@ -271,8 +297,19 @@ async function handleUserMessage(message, user, res) {
       await sendMessage(chatId, `❌ Sorry, I couldn't process your booking request. Error: ${error.message}`);
     }
     
-  } else {
-    const contextString = await ContextService.buildContextString(userId, chatId);
+  } else if (intent === 'general') {
+    try {
+      await DailyStats.incrementGeneralChat();
+    } catch (e) {
+      console.log('Could not increment general chat count:', e.message);
+    }
+    
+    let contextString = '';
+    try {
+      contextString = await ContextService.buildContextString(userId, chatId);
+    } catch (e) {
+      console.log('Could not build context string:', e.message);
+    }
     
     let systemPrompt = `You are a helpful AI assistant. Always greet the user with "Jay Swaminarayan 🙏". Respond to the user's message in a friendly and concise manner.`;
     
@@ -285,24 +322,15 @@ async function handleUserMessage(message, user, res) {
     try {
       const response = await askAI(fullPrompt);
       
-      await Message.createAssistantMessage({
-        conversationId: conversationId,
-        userId,
-        aiResponse: response
-      });
-      
-      if (conversationId) {
-        await Conversation.addMessageToContext(conversationId, {
-          role: 'assistant',
-          content: response ? response.substring(0, 500) : ''
-        });
-      }
+      // Skip saving to database for general chat (no conversationId)
+      // Messages are only saved for resume/booking intents
       
       await sendMessage(chatId, response);
     } catch (error) {
+      console.error('AI Error:', error.message);
       await sendMessage(chatId, 
         `Sorry, I couldn't process your request. ` +
-        `Make sure NVIDIA API is configured or Ollama is running.\n\n` +
+        `Make sure NVIDIA API is configured or Ollama is running locally.\n\n` +
         `Error: ${error.message}`
       );
     }

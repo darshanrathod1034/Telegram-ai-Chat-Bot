@@ -52,10 +52,11 @@ async function generateResumePDF(resumeData, outputPath = 'resume.pdf') {
       doc.moveDown(0.5);
 
       // Divider line
+      const headerY = doc.y;
       doc.strokeColor(primaryColor)
         .lineWidth(2)
-        .moveTo(50, doc.y)
-        .lineTo(545, doc.y)
+        .moveTo(50, headerY)
+        .lineTo(545, headerY)
         .stroke();
 
       doc.moveDown(1);
